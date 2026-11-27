@@ -263,6 +263,15 @@ def evaluate(card):
                 continue
             seen.add((kind, target))
             key = "%s/%s/%s" % (src, kind, target)
+            if card.get("snapshot_missing"):
+                check(
+                    key,
+                    group,
+                    "「" + quote + "」供给核验",
+                    "待复核",
+                    "缺少当时的供给快照。",
+                )
+                continue
             buckets = {s: [] for s in ("支持", "冲突", "未知")}
             for row in card["snapshot"]:
                 buckets[observed(row, kind, target)].append(row["id"])
@@ -346,12 +355,22 @@ def evaluate(card):
             "%d 字，试点上限 %d 字" % (size, LIMITS[caption]),
         )
         if over:
+            draft = card.get("draft", "") if src == "long" else ""
+            provenance = (
+                "缺少对应生成原稿，无法区分生成与展示环节。"
+                if not draft
+                else (
+                    "生成原稿和展示长标题一致。"
+                    if draft == text
+                    else "生成原稿与展示文本不同，需核对展示模板。"
+                )
+            )
             issue(
                 key,
                 SOURCES[src],
                 "标题超出试点字数",
-                "实测 %d 字。" % size,
-                "标题表达",
+                "实测 %d 字。%s" % (size, provenance),
+                "标题表达" if draft else "标题表达 · 生产环节待核验",
                 "压缩重复表达并重新检查卡面。",
             )
     cities = {}
@@ -365,11 +384,13 @@ def evaluate(card):
         "theme/volume",
         "主题场景",
         "可用供给规模",
-        quantity,
-        "%d 个可用套餐，已知单城最多 %d 个。"
+        "待复核" if card.get("snapshot_missing") else quantity,
+        "供给快照未提供，数量未知。"
+        if card.get("snapshot_missing")
+        else "%d 个可用套餐，已知单城最多 %d 个。"
         % (len(card["snapshot"]), max(cities.values(), default=0)),
     )
-    if quantity == "不合规":
+    if quantity == "不合规" and not card.get("snapshot_missing"):
         issue(
             "theme/volume",
             "主题场景",
@@ -379,7 +400,15 @@ def evaluate(card):
             "扩充适用供给或调整主题。",
         )
     size = card.get("image_size")
-    if size:
+    if size and card.get("image_source") == "capture":
+        check(
+            "image/spec",
+            "图片",
+            "原图尺寸",
+            "待复核",
+            "仅有展示截图，无法由截图像素推定原素材规格。",
+        )
+    elif size:
         good = size[0] == size[1] and max(size) >= 750
         check(
             "image/spec",
@@ -401,7 +430,7 @@ def evaluate(card):
         ("主题场景", "场景吸引力", 4),
         ("图内短标题", "表达易读性", 3),
         ("图外长标题", "文案吸引力", 4),
-        ("图片", "主体相关性与视觉表现", 4),
+        ("图片", "视觉表现与吸引力", 4),
     ]:
         check(
             "manual/" + group,
@@ -428,7 +457,7 @@ def evaluate(card):
     for e in evidence:
         if e["source"] == "主题标签" and classified[e["key"]]["status"] == "需修改":
             mismatch.update(e["ids"]["冲突"])
-    fraction = len(mismatch) / len(card["snapshot"])
+    fraction = len(mismatch) / len(card["snapshot"]) if card["snapshot"] else 0
     if fraction > 0.10:
         fit = classified["theme/fit"]
         fit.update(

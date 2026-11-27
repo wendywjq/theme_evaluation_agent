@@ -53,3 +53,22 @@ python3 -m unittest discover -s tests -v
 ```
 
 核心实现位于 `evaluator.py`（承诺核验、归因和差异）、`app.py`（本地服务与持久化）、`vision.py`（可选视觉评测）、`web/`（工作台）。仓库只包含合成样例，不含企业数据、账号或平台接口。
+
+### 本机运行视觉模型
+
+可使用支持图像的 llama.cpp 服务。在两个终端分别启动模型和工作台。下例使用 Qwen3-VL-4B-Instruct 量化权重及同仓库的 F16 视觉投影文件，全程使用本机回环地址。
+
+```sh
+llama-server --host 127.0.0.1 --port 18779 --parallel 1 -c 8192 --jinja \
+  -a Qwen3-VL-4B-Instruct-Q4_K_M \
+  -m /path/to/Qwen3-VL-4B-Instruct-Q4_K_M.gguf --mmproj /path/to/mmproj-F16.gguf
+```
+
+```sh
+QC_MODEL_JSON_SCHEMA=1 QC_MODEL=Qwen3-VL-4B-Instruct-Q4_K_M \
+QC_MODEL_URL=http://127.0.0.1:18779/v1/chat/completions python3 app.py
+```
+
+在「新建评测」上传卡面后选择视觉模型。使用 Feed 截图时，裁出同一张卡的封面，另行填写真实展示长标题，图片来源选择「展示截图」。缺少历史供给时留空；数量、供给贴合度及原图规格进入待复核。每个版本在「输入与生产记录」保留模型返回的调用 ID、模型名称、用量和耗时。已命中底线的版本，其余分项评分用于诊断。
+
+[模型权重与视觉投影](https://huggingface.co/unsloth/Qwen3-VL-4B-Instruct-GGUF) · [llama.cpp](https://github.com/ggml-org/llama.cpp)

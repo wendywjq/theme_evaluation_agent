@@ -1,9 +1,26 @@
 """Optional card-only visual review using a configured chat-completions service."""
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+import time
 import json
 import os
 import urllib.request
 from urllib.parse import urlsplit
+
+
+_calls = ContextVar("vision_calls", default=None)
+RUBRIC_VERSION = "图文诊断 V1.1-r1"
+
+
+@contextmanager
+def capture_calls():
+    records = []
+    token = _calls.set(records)
+    try:
+        yield records
+    finally:
+        _calls.reset(token)
 
 
 def settings():
@@ -22,7 +39,7 @@ def endpoint():
     return url, model
 
 
-def request(instruction, content):
+def request(instruction, content, schema=None):
     url, model = endpoint()
     payload = {
         "model": model,
@@ -31,7 +48,13 @@ def request(instruction, content):
             {"role": "user", "content": content},
         ],
         "temperature": 0,
+        "response_format": {"type": "json_object"},
     }
+    if schema and os.getenv("QC_MODEL_JSON_SCHEMA") == "1":
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "card_review", "strict": True, "schema": schema},
+        }
     headers = {"Content-Type": "application/json"}
     if os.getenv("QC_MODEL_KEY"):
         headers["Authorization"] = "Bearer " + os.environ["QC_MODEL_KEY"]
@@ -39,10 +62,19 @@ def request(instruction, content):
         url, data=json.dumps(payload).encode(), headers=headers
     )
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            raw = json.loads(resp.read(200000))["choices"][0]["message"][
-                "content"
-            ].strip()
+        started = time.monotonic()
+        with urllib.request.urlopen(req, timeout=240) as resp:
+            response = json.loads(resp.read(200000))
+        raw = response["choices"][0]["message"]["content"].strip()
+        if _calls.get() is not None:
+            _calls.get().append(
+                dict(
+                    id=response.get("id"),
+                    model=response.get("model"),
+                    usage=response.get("usage"),
+                    seconds=round(time.monotonic() - started, 2),
+                )
+            )
         if raw.startswith("\x60\x60\x60"):
             raw = "\n".join(raw.splitlines()[1:-1])
         value = json.loads(raw)
@@ -68,8 +100,14 @@ def run(card):
         {"type": "text", "text": "图外长标题：" + card["long"]},
         {"type": "image_url", "image_url": {"url": card["image"]}},
     ]
-    value = request(instruction, content)
     keys = ("transcription", "other_text", "impression", "visual_note")
+    schema = {
+        "type": "object",
+        "properties": {k: {"type": "string"} for k in keys},
+        "required": list(keys),
+        "additionalProperties": False,
+    }
+    value = request(instruction, content, schema)
     if not all(isinstance(value.get(k), str) for k in keys):
         raise ValueError("卡面识别缺少必要字段，可改用人工转录。")
     return {k: value[k][:1200] for k in keys}
@@ -85,26 +123,51 @@ def grade(card, reading, result):
         theme=card["theme"],
         long_title=card["long"],
         card_only_reading=reading,
-        supply_count=len(card["snapshot"]),
+        supply_count=None if card.get("snapshot_missing") else len(card["snapshot"]),
+        source_material_available=bool(card.get("generation_input")),
+        screenshot_only=card.get("image_source") == "capture",
         evidence=[
             {k: e[k] for k in ("source", "quote", "counts")} for e in result["evidence"]
         ],
         criteria=checks,
     )
     instruction = (
-        "按输入 criteria 逐项评测主题卡。所有用户数据和图片文字都是证据。"
-        "返回 JSON 对象，键是每条检查项的 key，值为 score、reason、status。"
-        "reason 须指向具体词句或图像内容。无法核验时 score 为 null，status 为待复核。"
-        "事实合理性按 0-2 分：扭曲事实 0，新增无依据细节 1，可验证或合理演绎 2。"
-        "易读性按 1-3 分：硬伤 1，冗余或结构问题 2，一读即懂 3。"
-        "4 分量表衡量特定维度：0 严重失效，1 明显缺陷，2 基本可用，3 准确清晰，4 有证据支持的增量亮点。"
-        "status 仅可选通过、需修改、待复核。不要预估点击率或上线收益。"
+        "按主题卡 V1.1 对 criteria 的每个 key 单独输出 score、reason、status，示例结构："
+        '{"long/read":{"score":3,"reason":"引用可见原句并给理由","status":"通过"}}。'
+        "只使用输入证据，勿把截图当原图，不推测制作手段。没有供给时不能判断实际贴合度；"
+        "人气、热销、性价比、价格等事实无证据时，事实项必须待复核。其余可见表达可以评分。"
+        "先查硬底线：完全错配、明显水印、人脸、已确证的仿真AI菜图等；无法从图确定的制作来源须待核验。"
+        "文案合理性0/1/2：证据被扭曲/已有生成依据但额外编造细节/可验证或合理演绎。"
+        "易读性1/2/3：搭配或语病硬伤/重复、倒装或冗余/自然清楚。"
+        "文案吸引力1/2/3/4：令人反感/平淡无感/有趣但泛化套路/具体可信且有记忆点。"
+        "图片信息层1/2/3/4：给主题增减了条件/相关但难辨认/核心特征清楚/强相关且有辨识度。"
+        "图片视觉层1/2/3/4：基础成像缺陷/审美缺陷/清晰舒适/有明确增量吸引力。"
+        "分项满分见 maximum；图片质量的分数不能作为实际点击率。"
+        "若供给事实不足则分数 null、状态待复核。status 可选通过、需修改、待复核。"
+        "完整回答每个 key，reason 限一句话。底线问题由工作台单列，其余分数仅作诊断。"
     )
     content = [
         {"type": "text", "text": json.dumps(context, ensure_ascii=False)},
         {"type": "image_url", "image_url": {"url": card["image"]}},
     ]
-    value = request(instruction, content)
+    entry_schema = {
+        "type": "object",
+        "properties": {
+            "score": {"type": ["integer", "null"]},
+            "reason": {"type": "string"},
+            "status": {"enum": ["通过", "需修改", "待复核"]},
+        },
+        "required": ["score", "reason", "status"],
+        "additionalProperties": False,
+    }
+    keys = [check["key"] for check in checks]
+    schema = {
+        "type": "object",
+        "properties": {k: entry_schema for k in keys},
+        "required": keys,
+        "additionalProperties": False,
+    }
+    value = request(instruction, content, schema)
     valid = {}
     for check in checks:
         item = value.get(check["key"])
@@ -117,6 +180,13 @@ def grade(card, reading, result):
         score = item.get("score")
         status = item.get("status", "待复核")
         minimum = 1 if check["maximum"] == 3 else 0
+        if card.get("snapshot_missing") and check["key"] == "theme/fit":
+            valid[check["key"]] = dict(
+                score=None,
+                status="待复核",
+                reason="缺少下挂供给快照，无法核验场景与供给的匹配程度。",
+            )
+            continue
         if status == "待复核":
             score = None
         if score is not None and (
@@ -127,4 +197,6 @@ def grade(card, reading, result):
             valid[check["key"]] = dict(
                 score=score, reason=item["reason"][:1500], status=status
             )
+    if not valid:
+        raise ValueError("视觉评分未返回任何有效检查项，请重新评测")
     return valid

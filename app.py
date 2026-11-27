@@ -86,11 +86,18 @@ def clean_card(p):
         )
         if not valid or len(raw) > 3 * 1024 * 1024:
             raise ValueError("图片格式不符或超过 3 MiB")
+    missing = p.get("snapshot_missing") is True
+    if missing and p.get("snapshot") not in (None, []):
+        raise ValueError("已提供套餐时请取消缺失快照标记")
+    card["snapshot_missing"] = missing
+    card["image_source"] = (
+        "capture" if p.get("image_source") == "capture" else "original"
+    )
     card["image_size"] = dimensions(raw) if image else None
     card.update(
         image=image,
         visual="upload" if image else "illustration",
-        snapshot=ev.validate_snapshot(p.get("snapshot")),
+        snapshot=[] if missing else ev.validate_snapshot(p.get("snapshot")),
         snapshot_at=clean_text(p, "snapshot_at", 64) or now(),
     )
     return card
@@ -114,21 +121,22 @@ def save_case(db, case):
 
 
 def version(case, card, number, mode="local"):
-    reading = None
-    if mode == "vision":
-        if case["model"] != vision.settings()[1] or case.get(
-            "model_source"
-        ) != ev.digest(vision.settings()[0]):
-            raise ValueError("模型配置已变化，无法在相同模型版本下复评")
-        reading = vision.run(card)
-        card["transcription"] = reading["transcription"]
-    if reading:
-        card["other_text"] = reading["other_text"]
-    result = ev.evaluate(card)
-    if reading:
-        result["visual_read"] = reading
-        estimates = vision.grade(card, reading, result)
-        ev.apply_assessments(result, estimates)
+    with vision.capture_calls() as calls:
+        reading = None
+        if mode == "vision":
+            if case["model"] != vision.settings()[1] or case.get(
+                "model_source"
+            ) != ev.digest(vision.settings()[0]):
+                raise ValueError("模型配置已变化，无法在相同模型版本下复评")
+            reading = vision.run(card)
+            card["transcription"] = reading["transcription"]
+        if reading:
+            card["other_text"] = reading["other_text"]
+        result = ev.evaluate(card)
+        if reading:
+            result["visual_read"] = reading
+            estimates = vision.grade(card, reading, result)
+            ev.apply_assessments(result, estimates)
     return dict(
         n=number,
         at=now(),
@@ -139,6 +147,8 @@ def version(case, card, number, mode="local"):
         transcription=card["transcription"],
         result=result,
         reviews=[],
+        model_calls=calls,
+        vision_rubric=vision.RUBRIC_VERSION if mode == "vision" else "",
     )
 
 
@@ -154,6 +164,8 @@ def build(p, ident=None):
             "name",
             "image",
             "image_size",
+            "image_source",
+            "snapshot_missing",
             "visual",
             "snapshot",
             "snapshot_at",

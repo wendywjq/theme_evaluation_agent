@@ -127,7 +127,7 @@ function renderDesk() {
   const manual = r.checks.filter((ch) => ch.status === "待复核").length;
   main.innerHTML = `<div class="pagehead"><div><div class="crumb">评测工作台 <span>/</span> 单卡评测</div><h1>单卡评测</h1></div>
   <div class="actions"><a class="button" href="#/history">评测记录</a>${btn("＋ 新建评测", "new", "primary")}</div></div>
-  <div class="metrics">${metric("供给快照", c.snapshot.length + " <em>个套餐</em>", "按落地页顺序核验")}${metric("冲突供给", conflict + " <em>个套餐</em>", "合并各项承诺后去重", conflict ? "warm" : "")}
+  <div class="metrics">${metric("供给快照", c.snapshot_missing ? "未提供" : c.snapshot.length + " <em>个套餐</em>", "按落地页顺序核验")}${metric("冲突供给", c.snapshot_missing ? "待核验" : conflict + " <em>个套餐</em>", "合并各项承诺后去重", conflict ? "warm" : "")}
   ${metric("待修改问题", issues.length + " <em>项</em>", "含机器判定与人工改判")}${metric("待人工复核", manual + " <em>项</em>", "待补证据或主观评分")}</div>
   <div class="workspace"><aside class="box cardbox"><div class="box-head"><h2>卡面预览</h2><span class="tag">V${v.n}</span></div><div class="preview-wrap">${preview(c, v)}</div>
   <div class="metadata"><dl><dt>上游主题</dt><dd>${safe(c.theme)}</dd><dt>素材</dt><dd>${c.image ? "上传卡面" : "本地示意模板"}</dd><dt>供给快照</dt><dd class="mono">${safe(c.snapshot_id.slice(0, 10))}</dd><dt>标准版本</dt><dd>${safe(c.rubric)}</dd></dl>
@@ -170,6 +170,7 @@ function drawPanel() {
           : "当前文案没有可自动提取的承诺"),
     )}</p>
     ${r.visual_read ? `<small>视觉观察：${safe(r.visual_read.visual_note)} · 其他文字：${safe(r.visual_read.other_text || "无")}</small>` : ""}</div>
+    ${r.checks.some((x) => x.status === "不合规") ? '<p class="notice">本版命中合规底线。以下质量分用于定位问题，不计入合格卡均分。</p>' : ""}
     ${groups
       .map((group) => {
         const rows = r.checks.filter((i) => i.group === group);
@@ -187,7 +188,7 @@ function drawPanel() {
   } else if (panel === "issues") {
     host.innerHTML = `<h3>问题归因</h3>${r.issues.length ? r.issues.map((i) => `<article class="finding"><div class="line-title"><span class="tag">${safe(i.group)}</span><small>${safe(i.certainty)}</small></div><h3>${safe(i.title)}</h3><p><b>归属环节</b>　${safe(i.owner)}</p><p>${safe(i.reason)}</p><div class="advice">${safe(i.action)}</div><div class="row">${r.evidence.some((x) => x.key === i.key) ? btn("查看冲突套餐 →", "evidence", "link", `data-key="${safe(i.key)}" data-filter="冲突"`) : ""}${btn("核对生产记录", "inputs", "link")}</div></article>`).join("") : empty("本版没有已确认的待修改问题。待复核项可在分项评测中查看。")}`;
   } else if (panel === "evidence") {
-    host.innerHTML = `<div class="line-title"><h3>按承诺核验</h3><small>全量 ${current.snapshot.length} 个套餐</small></div>
+    host.innerHTML = `<div class="line-title"><h3>按承诺核验</h3><small>${current.snapshot_missing ? "缺少历史供给快照" : "全量 " + current.snapshot.length + " 个套餐"}</small></div>
     ${
       r.evidence
         .map(
@@ -272,6 +273,7 @@ function inputs() {
   <dt>生成原稿</dt><dd>${safe(v.draft) || "未提供"}</dd><dt>实际展示长标题</dt><dd>${safe(v.long)}</dd><dt>图内文字</dt><dd>${safe(c.image ? v.transcription : v.short) || "未提供"}</dd>
   <dt>评测配置</dt><dd>${safe(c.rubric)} · ${safe(c.model)} · ${safe(c.engine)}</dd><dt>供给快照</dt><dd>${safe(c.snapshot_at)}<small class="block mono">${safe(c.snapshot_id)}</small></dd></dl>
   <details><summary>查看全部供给字段（${c.snapshot.length} 条）</summary><pre>${safe(JSON.stringify(c.snapshot, null, 2))}</pre></details>
+  ${v.model_calls?.length ? `<details><summary>真实模型调用（${v.model_calls.length} 次）</summary><p>${safe(v.vision_rubric)}</p><pre>${safe(JSON.stringify(v.model_calls, null, 2))}</pre></details>` : ""}
   <details><summary>人工复核记录（${v.reviews.length} 条）</summary>${v.reviews.map((x) => `<p>${safe(x.key)} · ${safe(x.previous.status)} → ${safe(x.status)} · ${safe(x.note)}</p>`).join("") || empty("暂无人工改判")}</details>`,
     true,
   );
@@ -367,7 +369,8 @@ document.addEventListener("submit", async (e) => {
       const data = {
         ...fields,
         image: file ? await fileData(file) : "",
-        snapshot: JSON.parse(fields.snapshot),
+        snapshot: fields.snapshot.trim() ? JSON.parse(fields.snapshot) : [],
+        snapshot_missing: !fields.snapshot.trim(),
       };
       delete data.imageFile;
       delete data.supplies;

@@ -107,6 +107,19 @@ class ReviewFlowTests(unittest.TestCase):
                 )
                 self.assertEqual(row["score"], expected)
 
+    def test_missing_snapshot_and_display_capture_keep_evidence_pending(self):
+        payload = {**ev.sample(), "snapshot_missing": True, "snapshot": []}
+        card = app.clean_card(payload)
+        card.update(image_source="capture", image_size=[300, 298])
+        r = ev.evaluate(card)
+        checks = {x["key"]: x["status"] for x in r["checks"]}
+        for key in ("theme/volume", "image/spec", "long/price/20.0"):
+            self.assertEqual(checks[key], "待复核")
+        self.assertFalse(r["evidence"])
+        self.assertFalse(r["issues"])
+        with self.assertRaises(ValueError):
+            app.clean_card({**ev.sample(), "snapshot_missing": True})
+
     def test_snapshot_validation(self):
         row = {"id": "id", "price": "0", "weekday": "否", "people": "1", "lunch": ""}
         clean = ev.validate_snapshot([row])[0]
@@ -167,7 +180,7 @@ class ReviewFlowTests(unittest.TestCase):
         self.card.update(image=png, mode="vision", theme="隐藏主题Tag")
         reqs = []
 
-        def mock_request(instruction, content):
+        def mock_request(instruction, content, schema=None):
             reqs.append(content)
             if len(reqs) == 1:
                 return {

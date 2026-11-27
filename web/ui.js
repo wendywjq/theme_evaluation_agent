@@ -73,7 +73,7 @@ export function revisionForm(c, v) {
   <label>原长标题<output>${safe(v.long)}</output></label>
   <label>新版展示长标题<textarea required maxlength="200" name="long" rows="2">${safe(v.long)}</textarea></label>
   <label>新版生成原稿 <small>用于判断生成和展示哪个环节引入问题</small><textarea name="draft" rows="2">${safe(v.draft)}</textarea></label>
-  <p class="muted">如果新版长标题就是生成原稿，可将两项填成相同文本。供给 ${c.snapshot.length} 条 · 快照 ${safe(c.snapshot_id.slice(0, 8))}</p>
+  <p class="muted">如果新版长标题就是生成原稿，可将两项填成相同文本。供给 ${c.snapshot_missing ? "未提供" : c.snapshot.length + " 条"} · 快照 ${safe(c.snapshot_id.slice(0, 8))}</p>
   <p class="form-error" role="alert"></p><footer><button type="button" data-action="close">取消</button><button class="primary">保存并复评 →</button></footer></form>`;
 }
 export function newForm(sample, config) {
@@ -81,10 +81,11 @@ export function newForm(sample, config) {
   <div class="two"><label>主题标签<input required name="theme" placeholder="例如：工作日单人午餐"></label><label>图内短标题<input name="short" placeholder="午休一人食"></label></div>
   <label>图外长标题<input required name="long" placeholder="用户实际看到的完整长标题"></label>
   <label>实际卡面 <small>PNG、JPEG 或 WebP，最大 3 MiB；未上传时使用示意模板</small><input type="file" name="imageFile" accept="image/png,image/jpeg,image/webp"></label>
+  <label>图片来源<select name="image_source"><option value="original">原始素材</option><option value="capture">展示截图（原图规格待核验）</option></select></label>
   <label>图内短标题转录 <small>上传卡面时填写，未提供则标记待复核</small><input name="transcription"></label>
   <label>评测方式<select name="mode"><option value="local">本地核验 + 人工视觉评分</option>${config.vision ? '<option value="vision">视觉模型评测（发送卡面、标题、主题、证据计数）</option>' : ""}</select></label>
   <label>供给快照 <small>导入 CSV / JSON，保留落地页顺序；未知字段留空</small><input type="file" name="supplies" accept=".csv,.json"></label>
-  <label>供给 JSON<textarea required name="snapshot" class="code" rows="5" placeholder='[{"id":"M01","name":"午餐套餐","city":"示例城","price":19,"people":1,"lunch":true,"weekday":true}]'></textarea></label>
+  <label>供给 JSON <small>未取得历史快照时留空，供给相关项转为待复核</small><textarea name="snapshot" class="code" rows="5" placeholder='[{"id":"M01","name":"午餐套餐","city":"示例城","price":19,"people":1,"lunch":true,"weekday":true}]'></textarea></label>
   <label>快照时间 <small>留空采用导入时间</small><input type="datetime-local" name="snapshot_at"></label>
   <div class="two"><label>实际生成输入<textarea name="generation_input" rows="3" placeholder="例如：60 个套餐中有 42 个不超过20元"></textarea></label>
   <label>生成原稿<textarea name="draft" rows="3" placeholder="用于和展示长标题对照"></textarea></label></div>
